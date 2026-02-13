@@ -15,7 +15,6 @@ import {
 import {
   calculateTodayStats,
   formatClock,
-  formatTime,
   getRecentHistoryEntries
 } from './stats.js';
 import {
@@ -148,6 +147,27 @@ const createProgressRing = (progressRatio: number): string => {
   ).join('');
 };
 
+const FOOTER_COMMAND_BAR_HEIGHT = 3;
+const FOOTER_STATUS_LINE_HEIGHT = 1;
+const FOOTER_SUMMARY_HEIGHT = 4;
+const RECENT_HISTORY_MODAL_LIMIT = 12;
+
+const formatHistoryTimestamp = (timestamp: string): string => {
+  const parsedTimestamp = new Date(timestamp);
+
+  if (Number.isNaN(parsedTimestamp.getTime())) {
+    return timestamp;
+  }
+
+  const year = parsedTimestamp.getFullYear();
+  const month = String(parsedTimestamp.getMonth() + 1).padStart(2, '0');
+  const day = String(parsedTimestamp.getDate()).padStart(2, '0');
+  const hours = String(parsedTimestamp.getHours()).padStart(2, '0');
+  const minutes = String(parsedTimestamp.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+};
+
 const buildSessionRecordFromCompletion = (
   completionTimestampStart: string,
   completionTimestampEnd: string,
@@ -189,8 +209,10 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
   });
   let selectedSettingsIndex = 0;
   let isPromptOpen = false;
-  let latestToastMessage = '';
-  let toastTimeoutId: NodeJS.Timeout | null = null;
+  let isHistoryModalOpen = false;
+  let latestStatusMessage = '';
+  let latestStatusColor = 'white';
+  let statusTimeoutId: NodeJS.Timeout | null = null;
 
   const screen = blessed.screen({
     smartCSR: true,
@@ -218,7 +240,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     top: 3,
     left: 0,
     width: '100%',
-    bottom: 7,
+    bottom: FOOTER_COMMAND_BAR_HEIGHT + FOOTER_STATUS_LINE_HEIGHT + FOOTER_SUMMARY_HEIGHT,
     border: 'line',
     style: {
       border: { fg: 'white' },
@@ -307,32 +329,45 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     }
   });
 
-  const footerBox = blessed.box({
+  const summaryBox = blessed.box({
+    parent: screen,
+    bottom: FOOTER_COMMAND_BAR_HEIGHT + FOOTER_STATUS_LINE_HEIGHT,
+    left: 0,
+    width: '100%',
+    height: FOOTER_SUMMARY_HEIGHT,
+    border: 'line',
+    tags: true,
+    label: ' Daily Summary ',
+    style: {
+      border: { fg: 'white' },
+      fg: 'white'
+    }
+  });
+
+  const statusLineBox = blessed.box({
+    parent: screen,
+    bottom: FOOTER_COMMAND_BAR_HEIGHT,
+    left: 0,
+    width: '100%',
+    height: FOOTER_STATUS_LINE_HEIGHT,
+    tags: false,
+    style: {
+      fg: 'white'
+    }
+  });
+
+  const commandBarBox = blessed.box({
     parent: screen,
     bottom: 0,
     left: 0,
     width: '100%',
-    height: 7,
+    height: FOOTER_COMMAND_BAR_HEIGHT,
     border: 'line',
     tags: true,
-    label: ' Daily '
-  });
-
-  const toastBox = blessed.box({
-    parent: screen,
-    top: 1,
-    right: 2,
-    width: 42,
-    height: 3,
-    border: 'line',
-    tags: true,
-    hidden: true,
-    align: 'center',
-    valign: 'middle',
+    label: ' Commands ',
     style: {
-      border: { fg: 'cyan' },
-      fg: 'white',
-      bg: 'black'
+      border: { fg: 'white' },
+      fg: 'white'
     }
   });
 
@@ -350,8 +385,28 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     hidden: true
   });
 
+  const historyModal = blessed.box({
+    parent: screen,
+    top: 'center',
+    left: 'center',
+    width: '88%',
+    height: '70%',
+    border: 'line',
+    tags: true,
+    hidden: true,
+    scrollable: true,
+    alwaysScroll: true,
+    label: ' Recent History ',
+    style: {
+      border: { fg: 'cyan' },
+      fg: 'white',
+      bg: 'black'
+    }
+  });
+
   const updateResponsiveLayout = (): void => {
     const screenWidth = toNumber(screen.width);
+    const screenHeight = toNumber(screen.height);
 
     const settingsWidth = screenWidth >= 110 ? 34 : 28;
     settingsBox.width = settingsWidth;
@@ -365,25 +420,26 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       centerBox.top = 3;
     }
 
+    historyModal.width = Math.max(60, screenWidth - 10);
+    historyModal.height = Math.max(12, screenHeight - 6);
+
     screen.render();
   };
 
-  const setToast = (message: string, color: string): void => {
-    latestToastMessage = message;
+  const setStatusLine = (message: string, color: string): void => {
+    latestStatusMessage = message;
+    latestStatusColor = color;
 
-    if (toastTimeoutId !== null) {
-      clearTimeout(toastTimeoutId);
+    if (statusTimeoutId !== null) {
+      clearTimeout(statusTimeoutId);
     }
 
-    toastBox.style.border.fg = color;
-    toastBox.setContent(`{bold}${message}{/bold}`);
-    toastBox.show();
-    screen.render();
+    renderEverything();
 
-    toastTimeoutId = setTimeout(() => {
-      latestToastMessage = '';
-      toastBox.hide();
-      screen.render();
+    statusTimeoutId = setTimeout(() => {
+      latestStatusMessage = '';
+      latestStatusColor = 'white';
+      renderEverything();
     }, 3000);
   };
 
@@ -436,8 +492,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
 
     headerBox.style.border.fg = modeColor;
     headerBox.setContent(
-      `{bold}pomo{/bold}  {${modeColor}-fg}${modeLabel}{/${modeColor}-fg}  [{bold}${stateLabel}{/bold}]\n` +
-        'space start/pause | r reset | n next (cycle) | s skip break | j/k or arrows navigate | enter edit | q quit'
+      `{bold}pomo{/bold}  {${modeColor}-fg}${modeLabel}{/${modeColor}-fg}  [{bold}${stateLabel}{/bold}]`
     );
   };
 
@@ -463,36 +518,69 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     settingsList.select(selectedSettingsIndex);
   };
 
-  const renderFooter = (): void => {
+  const renderDailySummary = (): void => {
     const todayStats = calculateTodayStats(historyRecords);
-    const recentHistory = getRecentHistoryEntries(historyRecords, 3);
+    const lastSession = getRecentHistoryEntries(historyRecords, 1)[0] ?? null;
+    const lastSessionText =
+      lastSession === null
+        ? 'No completed sessions yet.'
+        : `${formatHistoryTimestamp(lastSession.timestampEnd)}  ` +
+          `${lastSession.label || '(no label)'}  ${lastSession.durationMinutes}m`;
 
-    const recentHistoryLines =
+    summaryBox.setContent(
+      `Today sessions: {bold}${todayStats.completedFocusSessions}{/bold}  |  ` +
+        `Focused minutes: {bold}${todayStats.totalFocusedMinutes}{/bold}\n` +
+        `Last session: ${lastSessionText}`
+    );
+  };
+
+  const renderStatusLine = (): void => {
+    const fallbackStatusLine =
+      `Status: ${MODE_LABELS[runtimeState.mode]} | ` +
+      `${runtimeState.status.toUpperCase()} | ` +
+      `${formatClock(runtimeState.remainingSeconds)}`;
+
+    statusLineBox.style.fg = latestStatusMessage.length > 0 ? latestStatusColor : 'white';
+    statusLineBox.setContent(latestStatusMessage.length > 0 ? latestStatusMessage : fallbackStatusLine);
+  };
+
+  const renderCommandBar = (): void => {
+    commandBarBox.setContent(
+      'space start/pause | r reset | n next | s skip | h history | j/k or arrows navigate | enter edit | q quit'
+    );
+  };
+
+  const renderHistoryModal = (): void => {
+    if (!isHistoryModalOpen) {
+      historyModal.hide();
+      return;
+    }
+
+    const recentHistory = getRecentHistoryEntries(historyRecords, RECENT_HISTORY_MODAL_LIMIT);
+    const historyContent =
       recentHistory.length === 0
         ? 'No completed sessions yet.'
         : recentHistory
             .map(
               (record) =>
-                `${formatTime(record.timestampEnd)}  ${record.label || '(no label)'}  ${record.durationMinutes}m`
+                `${formatHistoryTimestamp(record.timestampEnd)}  ${MODE_LABELS[record.mode]}  ` +
+                `${record.label || '(no label)'}  ${record.durationMinutes}m`
             )
             .join('\n');
 
-    footerBox.setContent(
-      `Completed focus sessions today: {bold}${todayStats.completedFocusSessions}{/bold} | ` +
-        `Focused minutes today: {bold}${todayStats.totalFocusedMinutes}{/bold}\n` +
-        `Recent history:\n${recentHistoryLines}`
-    );
+    historyModal.setContent(`${historyContent}\n\nPress h or Esc to close.`);
+    historyModal.show();
+    historyModal.setFront();
   };
 
   const renderEverything = (): void => {
     renderHeader();
     renderTimerPanel();
     renderSettings();
-    renderFooter();
-
-    if (latestToastMessage.length === 0) {
-      toastBox.hide();
-    }
+    renderDailySummary();
+    renderStatusLine();
+    renderCommandBar();
+    renderHistoryModal();
 
     screen.render();
   };
@@ -510,7 +598,10 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     const completionModeLabel = MODE_LABELS[transitionResult.completionEvent.completedMode];
 
     screen.program.bel();
-    setToast(`${completionModeLabel} ended. Next: ${MODE_LABELS[transitionResult.completionEvent.nextMode]}`, completionModeColor);
+    setStatusLine(
+      `${completionModeLabel} ended. Next: ${MODE_LABELS[transitionResult.completionEvent.nextMode]}`,
+      completionModeColor
+    );
 
     if (transitionResult.completionEvent.completedMode === 'focus') {
       const completedFocusRecord = buildSessionRecordFromCompletion(
@@ -522,7 +613,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
 
       historyRecords = [...historyRecords, completedFocusRecord];
       void appendHistoryRecord(storagePaths, completedFocusRecord).catch(() => {
-        setToast('Failed to save focus history.', 'red');
+        setStatusLine('Failed to save focus history.', 'red');
       });
     }
 
@@ -557,7 +648,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       const nextValue = Number.parseInt(value, 10);
 
       if (!Number.isFinite(nextValue) || nextValue < 1) {
-        setToast('Focus minutes must be a positive integer.', 'red');
+        setStatusLine('Focus minutes must be a positive integer.', 'red');
         return;
       }
 
@@ -568,6 +659,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       runtimeState = reconcileStateWithConfig(runtimeState, currentConfig);
       persistRuntimeState();
       renderEverything();
+      setStatusLine('Updated focus minutes.', 'green');
       return;
     }
 
@@ -582,7 +674,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       const nextValue = Number.parseInt(value, 10);
 
       if (!Number.isFinite(nextValue) || nextValue < 1) {
-        setToast('Short break minutes must be a positive integer.', 'red');
+        setStatusLine('Short break minutes must be a positive integer.', 'red');
         return;
       }
 
@@ -593,6 +685,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       runtimeState = reconcileStateWithConfig(runtimeState, currentConfig);
       persistRuntimeState();
       renderEverything();
+      setStatusLine('Updated short break minutes.', 'green');
       return;
     }
 
@@ -607,7 +700,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       const nextValue = Number.parseInt(value, 10);
 
       if (!Number.isFinite(nextValue) || nextValue < 1) {
-        setToast('Long break minutes must be a positive integer.', 'red');
+        setStatusLine('Long break minutes must be a positive integer.', 'red');
         return;
       }
 
@@ -618,6 +711,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       runtimeState = reconcileStateWithConfig(runtimeState, currentConfig);
       persistRuntimeState();
       renderEverything();
+      setStatusLine('Updated long break minutes.', 'green');
       return;
     }
 
@@ -635,7 +729,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       const nextValue = Number.parseInt(value, 10);
 
       if (!Number.isFinite(nextValue) || nextValue < 1) {
-        setToast('Sessions/long break must be a positive integer.', 'red');
+        setStatusLine('Sessions/long break must be a positive integer.', 'red');
         return;
       }
 
@@ -646,6 +740,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       runtimeState = reconcileStateWithConfig(runtimeState, currentConfig);
       persistRuntimeState();
       renderEverything();
+      setStatusLine('Updated sessions before long break.', 'green');
       return;
     }
 
@@ -659,7 +754,10 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     runtimeState = setCurrentLabel(runtimeState, value).nextState;
     persistRuntimeState();
     renderEverything();
+    setStatusLine('Updated task label.', 'green');
   };
+
+  const isInteractionBlocked = (): boolean => isPromptOpen || isHistoryModalOpen;
 
   await new Promise<void>((resolve) => {
     let hasShutdown = false;
@@ -687,8 +785,8 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
       hasShutdown = true;
       clearInterval(tickInterval);
 
-      if (toastTimeoutId !== null) {
-        clearTimeout(toastTimeoutId);
+      if (statusTimeoutId !== null) {
+        clearTimeout(statusTimeoutId);
       }
 
       process.off('SIGINT', onSigint);
@@ -707,39 +805,80 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     });
 
     screen.key(['space'], () => {
-      if (isPromptOpen) {
+      if (isInteractionBlocked()) {
         return;
       }
 
-      updateFromTransition(toggleStartPause(runtimeState, Date.now()));
+      const transitionResult = toggleStartPause(runtimeState, Date.now());
+      updateFromTransition(transitionResult);
+
+      if (transitionResult.nextState.status === 'running') {
+        setStatusLine('Timer started.', getModeBorderColor(transitionResult.nextState.mode));
+        return;
+      }
+
+      setStatusLine('Timer paused.', 'yellow');
     });
 
     screen.key(['r'], () => {
-      if (isPromptOpen) {
+      if (isInteractionBlocked()) {
         return;
       }
 
       updateFromTransition(resetTimer(runtimeState, currentConfig));
+      setStatusLine('Timer reset.', 'cyan');
     });
 
     screen.key(['n'], () => {
-      if (isPromptOpen) {
+      if (isInteractionBlocked()) {
         return;
       }
 
-      updateFromTransition(nextPhase(runtimeState, currentConfig));
+      const transitionResult = nextPhase(runtimeState, currentConfig);
+      updateFromTransition(transitionResult);
+      setStatusLine(
+        `Switched to ${MODE_LABELS[transitionResult.nextState.mode]}.`,
+        getModeBorderColor(transitionResult.nextState.mode)
+      );
     });
 
     screen.key(['s'], () => {
+      if (isInteractionBlocked()) {
+        return;
+      }
+
+      if (runtimeState.mode === 'focus') {
+        setStatusLine('Skip works only during breaks.', 'yellow');
+        return;
+      }
+
+      const transitionResult = skipBreak(runtimeState, currentConfig);
+      updateFromTransition(transitionResult);
+      setStatusLine('Skipped break. Back to Focus.', 'cyan');
+    });
+
+    screen.key(['h'], () => {
       if (isPromptOpen) {
         return;
       }
 
-      updateFromTransition(skipBreak(runtimeState, currentConfig));
+      isHistoryModalOpen = !isHistoryModalOpen;
+      renderEverything();
+      setStatusLine(isHistoryModalOpen ? 'Opened recent history.' : 'Closed recent history.', 'cyan');
+    });
+
+    screen.key(['escape'], () => {
+      if (isPromptOpen || !isHistoryModalOpen) {
+        return;
+      }
+
+      isHistoryModalOpen = false;
+      renderEverything();
+      setStatusLine('Closed recent history.', 'cyan');
     });
 
     screen.key(['j', 'down'], () => {
-      if (isPromptOpen) {
+      if (isInteractionBlocked()) {
         return;
       }
 
@@ -749,7 +888,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     });
 
     screen.key(['k', 'up'], () => {
-      if (isPromptOpen) {
+      if (isInteractionBlocked()) {
         return;
       }
 
@@ -759,7 +898,7 @@ export const launchTui = async (options: LaunchTuiOptions = {}): Promise<void> =
     });
 
     screen.key(['enter'], () => {
-      if (isPromptOpen) {
+      if (isInteractionBlocked()) {
         return;
       }
 
