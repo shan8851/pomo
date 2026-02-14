@@ -1,5 +1,7 @@
 # pomo
 
+<img width="1426" height="1209" alt="pomo" src="https://github.com/user-attachments/assets/5f8a9409-a63a-4931-b54c-add4f6898408" />
+
 `pomo` is a keyboard-first Pomodoro timer for the terminal, built with TypeScript + Node.js and a full-screen `neo-blessed` TUI.
 
 ## Requirements
