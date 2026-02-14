@@ -68,16 +68,26 @@ If `pomo` is not found, either run `npm link` first or use the built path (`npm 
 - `r`: reset current timer
 - `n`: next phase (uses long-break cadence)
 - `s`: skip break and return to focus
+- `h`: toggle detailed recent-history modal (`Esc` also closes it)
 - `j` / `k` or `↓` / `↑`: move through settings
 - `enter`: edit selected setting
 - `q` or `Ctrl+C`: quit
+
+## TUI Layout
+
+- Header with active mode + timer state
+- Main panel with timer, progress ring/bar (with right-side percent), and settings
+- Compact daily summary (today sessions, focused minutes, last completed session)
+- Single-line status/toast feedback bar for actions and errors
+- Fixed footer command bar with key hints
+- Detailed recent history available in a modal via `h`
 
 ## Features
 
 - Focus, short break, and long break modes
 - Configurable long-break cadence (`sessionsBeforeLongBreak`, default `4`)
-- Daily focus stats and session history
-- Terminal bell + in-app toast + best-effort desktop notification
+- Daily focus stats summary + modal recent history
+- Terminal bell + in-app status line feedback + best-effort desktop notification
 
 ## Data + Runtime Files
 
